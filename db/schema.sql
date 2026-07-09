@@ -104,6 +104,16 @@ alter table procurement.actor_relations enable row level security;
 alter table procurement.annotations enable row level security;
 alter table procurement.data_imports enable row level security;
 
+-- Optional read-only role for Streamlit Community Cloud.
+-- After running this file, set a strong password manually in Supabase SQL Editor:
+--   alter role procurement_reader with password 'REPLACE_WITH_STRONG_PASSWORD';
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'procurement_reader') then
+    create role procurement_reader login;
+  end if;
+end $$;
+
 -- Read policies for Supabase Auth/API clients.
 -- The Streamlit app should preferably use a read-only PostgreSQL role via DATABASE_URL.
 create policy "authenticated read actors" on procurement.actors for select to authenticated using (true);
@@ -115,15 +125,13 @@ create policy "authenticated read annotations" on procurement.annotations for se
 create policy "authors manage annotations" on procurement.annotations for all to authenticated using (created_by = auth.uid()) with check (created_by = auth.uid());
 create policy "authenticated read imports" on procurement.data_imports for select to authenticated using (true);
 
--- Optional read-only role for Streamlit Community Cloud.
--- After running this file, set a strong password manually in Supabase SQL Editor:
---   alter role procurement_reader with password 'REPLACE_WITH_STRONG_PASSWORD';
-do $$
-begin
-  if not exists (select 1 from pg_roles where rolname = 'procurement_reader') then
-    create role procurement_reader login;
-  end if;
-end $$;
+-- Read policies for direct PostgreSQL connections from Streamlit Community Cloud.
+create policy "reader read actors" on procurement.actors for select to procurement_reader using (true);
+create policy "reader read aliases" on procurement.actor_aliases for select to procurement_reader using (true);
+create policy "reader read procurements" on procurement.procurements for select to procurement_reader using (true);
+create policy "reader read relations" on procurement.actor_relations for select to procurement_reader using (true);
+create policy "reader read annotations" on procurement.annotations for select to procurement_reader using (true);
+create policy "reader read imports" on procurement.data_imports for select to procurement_reader using (true);
 
 grant usage on schema procurement to procurement_reader;
 grant select on all tables in schema procurement to procurement_reader;

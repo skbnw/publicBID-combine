@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 streamlit_stdout.log
 streamlit_stderr.log
+memo.txt

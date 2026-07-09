@@ -302,7 +302,15 @@ if page == "案件検索":
     vendor_query = query_param("vendor")
     vendor_options, body_options, bidding_method_options = search_options()
     years = query("SELECT MIN(fiscal_year) lo, MAX(fiscal_year) hi FROM procurements WHERE analysis_included").iloc[0]
-    lo, hi = int(years.lo), int(years.hi)
+    lo_value = row_value(years, "lo", 0)
+    hi_value = row_value(years, "hi", 1)
+    if pd.isna(lo_value) or pd.isna(hi_value):
+        st.error(
+            "調達データを読み取れませんでした。SupabaseのRLSポリシーで "
+            "`procurement_reader` にSELECT権限があるか確認してください。"
+        )
+        st.stop()
+    lo, hi = int(lo_value), int(hi_value)
     c1, c2, c3 = st.columns(3)
     fy = c1.slider("年度", lo, hi, (lo, hi))
     keyword = c2.text_input("案件名キーワード")
