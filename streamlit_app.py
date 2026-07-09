@@ -178,6 +178,22 @@ def row_value(row: pd.Series, name: str, position: int, default: object = 0) -> 
     return default
 
 
+def first_column_values(df: pd.DataFrame) -> list[str]:
+    if df.empty:
+        return []
+    return df.iloc[:, 0].dropna().astype(str).tolist()
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_values = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            unique_values.append(value)
+    return unique_values
+
+
 def procurement_portal_url(record_id: str | None = None) -> str:
     return PROCUREMENT_PORTAL_SEARCH_URL
 
@@ -252,7 +268,7 @@ def require_database() -> None:
 
 @st.cache_data(show_spinner=False)
 def search_options() -> tuple[list[str], list[str], list[str]]:
-    major_vendors = query(
+    consulting_vendors = first_column_values(query(
         """
         SELECT vendor_name_canonical
         FROM procurements
@@ -261,9 +277,21 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
           AND COALESCE(vendor_name_canonical, '') <> ''
         GROUP BY vendor_name_canonical
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
-        LIMIT 200
+        LIMIT 300
         """
-    )["vendor_name_canonical"].dropna().tolist()
+    ))
+    top_vendors = first_column_values(query(
+        """
+        SELECT vendor_name_canonical
+        FROM procurements
+        WHERE analysis_included
+          AND COALESCE(vendor_name_canonical, '') <> ''
+        GROUP BY vendor_name_canonical
+        ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
+        LIMIT 500
+        """
+    ))
+    vendor_candidates = unique_preserve_order([*consulting_vendors, *top_vendors])
     ordering_body_rows = query(
         """
         SELECT ordering_body_name, MIN(ministry_name) AS ministry_name
@@ -286,7 +314,7 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
             """
         )["bidding_method_name"].dropna().tolist()
     )
-    return [NO_SELECTION, *major_vendors], [NO_SELECTION, *ordering_bodies], [NO_SELECTION, *bidding_methods]
+    return [NO_SELECTION, *vendor_candidates], [NO_SELECTION, *ordering_bodies], [NO_SELECTION, *bidding_methods]
 
 
 require_database()
@@ -322,7 +350,7 @@ if page == "案件検索":
             "- いずれも機械的な暫定分類なので、共同研究の過程で見直す前提です。"
         )
     c4, c5, c6, c7 = st.columns(4)
-    vendor_pick = c4.selectbox("受注者名（主要コンサル）", vendor_options)
+    vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
     vendor_text = c5.text_input("受注者名（自由入力）", value=vendor_query, placeholder="例：アクセンチュア", key=f"vendor_text_{vendor_query}")
     body_pick = c6.selectbox("発注機関名", body_options)
     min_amount = c7.number_input("最低落札額（万円）", min_value=0, value=0, step=100)
