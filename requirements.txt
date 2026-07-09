@@ -1,0 +1,4 @@
+pandas>=2.0
+duckdb>=1.1
+streamlit>=1.42
+psycopg[binary]>=3.2

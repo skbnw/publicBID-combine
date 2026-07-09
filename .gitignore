@@ -1,0 +1,10 @@
+.streamlit/secrets.toml
+.env
+data/*.duckdb
+data/*.duckdb.wal
+data/raw/
+output/
+__pycache__/
+*.pyc
+streamlit_stdout.log
+streamlit_stderr.log
