@@ -13,13 +13,13 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "research.duckdb"
-APP_TITLE = "政府調達サーチ"
+APP_TITLE = "政府調達サーチ β"
 NO_SELECTION = "指定なし"
 CONSULTING_ALL = "すべて"
 CONSULTING_BROAD = "広義（周辺領域を含む）"
 CONSULTING_STRICT = "狭義（コンサル中核）"
 PROCUREMENT_PORTAL_SEARCH_URL = "https://www.p-portal.go.jp/pps-web-biz/UAA01/OAA0101"
-MENU_PAGES = ["案件検索", "コンサル検索", "省庁分析", "データ概要"]
+MENU_PAGES = ["案件検索", "コンサル検索", "省庁分析", "データ概要", "About"]
 MINISTRY_DISPLAY_ORDER = [
     "内閣官房",
     "内閣法制局",
@@ -107,6 +107,15 @@ def database_schema() -> str:
         return "procurement"
 
 
+def contact_text() -> str:
+    if value := os.getenv("CONTACT_TEXT"):
+        return value
+    try:
+        return st.secrets.get("CONTACT_TEXT", "共同研究チームまでご連絡ください。")
+    except FileNotFoundError:
+        return "共同研究チームまでご連絡ください。"
+
+
 @st.cache_resource
 def db():
     if url := database_url():
@@ -192,6 +201,14 @@ def unique_preserve_order(values: list[str]) -> list[str]:
             seen.add(value)
             unique_values.append(value)
     return unique_values
+
+
+def show_footer() -> None:
+    st.divider()
+    st.caption(
+        "© 2026 Government Procurement Search β project. "
+        "出典：調達ポータル。本サイトは非公式の研究用試作版です。"
+    )
 
 
 def procurement_portal_url(record_id: str | None = None) -> str:
@@ -584,7 +601,7 @@ elif page == "省庁分析":
         bodies["落札総額_億円"] = bodies["落札総額_億円"].round(1)
     st.dataframe(bodies, width="stretch", hide_index=True)
 
-else:
+elif page == "データ概要":
     st.subheader("区分別サマリー")
     overview = query(
         """
@@ -654,3 +671,47 @@ else:
     yearly["落札総額_億円"] = yearly["落札総額_億円"].round(1)
     yearly["年度"] = yearly["年度"].astype(str)
     st.dataframe(yearly, width="stretch", hide_index=True)
+
+else:
+    st.subheader("About")
+    st.markdown(
+        """
+        **政府調達サーチ β** は、調達ポータル由来の政府調達データを検索・分析するための研究用試作版です。
+
+        ### データについて
+
+        - 出典：調達ポータル
+        - 対象：調達ポータルで公開されている落札実績データをもとにした研究用データベース
+        - 目的：政府調達における受注者、発注機関、省庁、契約方式の傾向を共同研究で確認すること
+        - 注意：原データの更新、名寄せ、分類、重複判定には暫定処理を含みます
+
+        ### コンサル認定について
+
+        - **広義（周辺領域を含む）**：コンサル会社・調査会社・シンクタンク等に加え、システム導入支援、調査分析、政策支援など周辺領域を含めた暫定分類です。
+        - **狭義（コンサル中核）**：戦略、業務改革、政策調査、制度設計など、コンサルティング中核に近い案件・受注者を優先した暫定分類です。
+        - いずれも機械的な分類を含むため、共同研究の過程で見直す前提です。
+
+        ### 利用上の注意
+
+        - 本サイトは非公式の研究用試作版であり、調達ポータルまたは各府省の公式サービスではありません。
+        - 正確な原情報は、調達ポータルおよび各調達機関の公表情報をご確認ください。
+        - 金額、年度、受注者名、発注機関名、分類結果には、原データ由来または加工過程由来の誤差・表記揺れが含まれる可能性があります。
+        - CSV出力データを引用・再利用する場合は、出典が調達ポータルであること、本アプリの分類が暫定であることを明記してください。
+        """
+    )
+    st.markdown("### お問い合わせ・データ修正")
+    st.info(
+        "データの誤り、名寄せの問題、コンサル分類の修正提案、その他の確認事項がある場合は、"
+        f"{contact_text()}"
+    )
+    st.markdown(
+        """
+        ### ライセンス・クレジット
+
+        - データ出典：調達ポータル
+        - アプリ：政府調達サーチ β project
+        - 本アプリで付与した分類・名寄せ・集計ロジックは研究用の暫定成果です。
+        """
+    )
+
+show_footer()
