@@ -203,6 +203,15 @@ def unique_preserve_order(values: list[str]) -> list[str]:
     return unique_values
 
 
+def order_bidding_method_rows(df: pd.DataFrame, method_column: str = "契約方式・落札方式") -> pd.DataFrame:
+    if df.empty or method_column not in df.columns:
+        return df
+    order = {name: index for index, name in enumerate(BIDDING_METHOD_DISPLAY_ORDER)}
+    return df.assign(
+        _method_order=df[method_column].map(lambda name: order.get(name, 10_000))
+    ).sort_values(["_method_order", method_column]).drop(columns=["_method_order"])
+
+
 def show_footer() -> None:
     st.divider()
     st.caption(
@@ -520,6 +529,58 @@ elif page == "省庁分析":
         c1, c2 = st.columns(2)
         c1.metric("広義コンサル比率", f"{int(summary['broad_n'] or 0) / total_n * 100:.1f}%")
         c2.metric("狭義コンサル比率", f"{int(summary['strict_n'] or 0) / total_n * 100:.1f}%")
+
+    st.subheader("契約方式・落札方式 × 年度")
+    st.caption("選択中の省庁・対象区分について、縦軸を契約方式・落札方式、横軸を年度として集計します。")
+    matrix_where = ["analysis_included", "ministry_name = ?"]
+    matrix_params: list = [ministry]
+    if scope == CONSULTING_BROAD:
+        matrix_where.append("consulting_flag_broad")
+    elif scope == CONSULTING_STRICT:
+        matrix_where.append("consulting_flag_strict")
+    matrix_predicate = " AND ".join(matrix_where)
+    method_year = query(
+        f"""
+        SELECT COALESCE(bidding_method_name, '不明') AS 契約方式・落札方式,
+               fiscal_year AS 年度,
+               COUNT(*) AS 件数,
+               SUM(award_amount_yen) / 1e8 AS 落札総額_億円
+        FROM procurements
+        WHERE {matrix_predicate}
+        GROUP BY bidding_method_name, fiscal_year
+        ORDER BY fiscal_year, bidding_method_name
+        """,
+        matrix_params,
+    )
+    if method_year.empty:
+        st.info("契約方式・落札方式別の集計対象データがありません。")
+    else:
+        method_year["年度"] = method_year["年度"].astype(str)
+        method_year["落札総額_億円"] = method_year["落札総額_億円"].round(1)
+        metric_choice = st.radio("表示指標", ["件数", "落札総額_億円"], horizontal=True, key="method_year_metric")
+        method_matrix = method_year.pivot_table(
+            index="契約方式・落札方式",
+            columns="年度",
+            values=metric_choice,
+            aggfunc="sum",
+            fill_value=0,
+        ).reset_index()
+        method_matrix = order_bidding_method_rows(method_matrix)
+        year_columns = [column for column in method_matrix.columns if column != "契約方式・落札方式"]
+        if metric_choice == "件数":
+            method_matrix[year_columns] = method_matrix[year_columns].astype(int)
+        else:
+            method_matrix[year_columns] = method_matrix[year_columns].round(1)
+        st.dataframe(method_matrix, width="stretch", hide_index=True)
+        chart_source = method_year.pivot_table(
+            index="年度",
+            columns="契約方式・落札方式",
+            values=metric_choice,
+            aggfunc="sum",
+            fill_value=0,
+        ).sort_index()
+        st.caption("年度ごとの契約方式・落札方式別の分布です。")
+        st.bar_chart(chart_source)
 
     st.subheader("上位受注者")
     top_vendors = query(
