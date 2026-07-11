@@ -117,42 +117,38 @@ def contact_text() -> str:
 
 
 @st.cache_resource
-def db():
-    if url := database_url():
-        import psycopg
+def duckdb_connection():
+    return duckdb.connect(str(DB_PATH), read_only=True)
 
-        try:
-            connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
-        except TypeError:
-            connection = psycopg.connect(url, autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT set_config('search_path', %s, false)", (f"{database_schema()}, public",))
-        return "postgres", connection
-    return "duckdb", duckdb.connect(str(DB_PATH), read_only=True)
+
+def postgres_connection():
+    import psycopg
+
+    url = database_url()
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured")
+    try:
+        connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+    except TypeError:
+        connection = psycopg.connect(url, autocommit=True)
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT set_config('search_path', %s, false)", (f"{database_schema()}, public",))
+    return connection
 
 
 def query(sql: str, params: list | None = None) -> pd.DataFrame:
-    backend, connection = db()
-    if backend == "duckdb":
+    if not database_url():
+        connection = duckdb_connection()
         result = connection.execute(sql, params or [])
         if result is None:
             return pd.DataFrame()
         return result.fetchdf()
     postgres_sql = sql.replace("?", "%s")
-    try:
+    with postgres_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(postgres_sql, params or [])
             rows = cursor.fetchall()
             return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
-    except Exception as exc:
-        if exc.__class__.__name__ == "DuplicatePreparedStatement":
-            db.clear()
-            _, retry_connection = db()
-            with retry_connection.cursor() as cursor:
-                cursor.execute(postgres_sql, params or [])
-                rows = cursor.fetchall()
-                return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
-        raise
 
 
 def query_param(name: str) -> str:
