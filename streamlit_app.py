@@ -151,6 +151,21 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
             return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
 
 
+def safe_query(sql: str, params: list | None = None) -> tuple[pd.DataFrame, Exception | None]:
+    try:
+        return query(sql, params), None
+    except Exception as exc:
+        return pd.DataFrame(), exc
+
+
+def show_search_error(exc: Exception) -> None:
+    st.error(
+        "検索中にデータベース接続または集計処理でエラーが発生しました。"
+        "アプリは停止していません。条件を少し絞るか、時間をおいて再度検索してください。"
+    )
+    st.caption(f"エラー種別: {exc.__class__.__name__}")
+
+
 def query_param(name: str) -> str:
     value = st.query_params.get(name, "")
     if isinstance(value, list):
@@ -446,7 +461,10 @@ if page == "案件検索":
             where.append("consulting_flag_strict")
 
         predicate = " AND ".join(where)
-        total_df = query(f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}", params)
+        total_df, total_error = safe_query(f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}", params)
+        if total_error:
+            show_search_error(total_error)
+            st.stop()
         if total_df.empty:
             total = pd.Series({"n": 0, "amount": 0})
         else:
@@ -458,7 +476,10 @@ if page == "案件検索":
         m2.metric("落札額合計", f"{total_amount / 1e8:,.1f}億円")
 
         columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
-        results = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
+        results, results_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
+        if results_error:
+            show_search_error(results_error)
+            st.stop()
         results = hide_internal_columns(add_portal_links(results))
         st.dataframe(
             results,
@@ -474,8 +495,13 @@ if page == "案件検索":
         )
         if total_n > 1000:
             st.caption("画面表示は最新1,000件まで。ダウンロードには全件を含めます。")
-        export = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
-        export = add_portal_links(export)
+        export, export_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
+        if export_error:
+            st.warning("CSV用の全件データ取得に失敗しました。画面表示分のみCSVで出力できます。")
+            st.caption(f"エラー種別: {export_error.__class__.__name__}")
+            export = results.copy()
+        else:
+            export = add_portal_links(export)
         export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, min_amount)
         st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
 
