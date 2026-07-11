@@ -121,7 +121,7 @@ def db():
     if url := database_url():
         import psycopg
 
-        connection = psycopg.connect(url, autocommit=True)
+        connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
         with connection.cursor() as cursor:
             cursor.execute("SELECT set_config('search_path', %s, false)", (f"{database_schema()}, public",))
         return "postgres", connection
@@ -135,10 +135,21 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
         if result is None:
             return pd.DataFrame()
         return result.fetchdf()
-    with connection.cursor() as cursor:
-        cursor.execute(sql.replace("?", "%s"), params or [])
-        rows = cursor.fetchall()
-        return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
+    postgres_sql = sql.replace("?", "%s")
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(postgres_sql, params or [], prepare=False)
+            rows = cursor.fetchall()
+            return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
+    except Exception as exc:
+        if exc.__class__.__name__ == "DuplicatePreparedStatement":
+            db.clear()
+            _, retry_connection = db()
+            with retry_connection.cursor() as cursor:
+                cursor.execute(postgres_sql, params or [], prepare=False)
+                rows = cursor.fetchall()
+                return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
+        raise
 
 
 def query_param(name: str) -> str:
