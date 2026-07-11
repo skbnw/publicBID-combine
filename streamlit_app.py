@@ -121,7 +121,10 @@ def db():
     if url := database_url():
         import psycopg
 
-        connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+        try:
+            connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+        except TypeError:
+            connection = psycopg.connect(url, autocommit=True)
         with connection.cursor() as cursor:
             cursor.execute("SELECT set_config('search_path', %s, false)", (f"{database_schema()}, public",))
         return "postgres", connection
@@ -138,7 +141,10 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
     postgres_sql = sql.replace("?", "%s")
     try:
         with connection.cursor() as cursor:
-            cursor.execute(postgres_sql, params or [], prepare=False)
+            try:
+                cursor.execute(postgres_sql, params or [], prepare=False)
+            except TypeError:
+                cursor.execute(postgres_sql, params or [])
             rows = cursor.fetchall()
             return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
     except Exception as exc:
@@ -146,7 +152,10 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
             db.clear()
             _, retry_connection = db()
             with retry_connection.cursor() as cursor:
-                cursor.execute(postgres_sql, params or [], prepare=False)
+                try:
+                    cursor.execute(postgres_sql, params or [], prepare=False)
+                except TypeError:
+                    cursor.execute(postgres_sql, params or [])
                 rows = cursor.fetchall()
                 return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
         raise
