@@ -353,6 +353,19 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
     return [NO_SELECTION, *vendor_candidates], [NO_SELECTION, *ordering_bodies], [NO_SELECTION, *bidding_methods]
 
 
+@st.cache_data(show_spinner=False)
+def fiscal_year_range() -> tuple[int, int] | None:
+    years = query("SELECT MIN(fiscal_year) AS lo, MAX(fiscal_year) AS hi FROM procurements WHERE analysis_included")
+    if years.empty:
+        return None
+    row = years.iloc[0]
+    lo_value = row_value(row, "lo", 0)
+    hi_value = row_value(row, "hi", 1)
+    if pd.isna(lo_value) or pd.isna(hi_value):
+        return None
+    return int(lo_value), int(hi_value)
+
+
 require_database()
 st.title(APP_TITLE)
 st.caption("出典：調達ポータル　オープンソースデータを検索できます")
@@ -365,38 +378,40 @@ page = st.sidebar.radio("表示", MENU_PAGES, index=page_index)
 if page == "案件検索":
     vendor_query = query_param("vendor")
     vendor_options, body_options, bidding_method_options = search_options()
-    years = query("SELECT MIN(fiscal_year) lo, MAX(fiscal_year) hi FROM procurements WHERE analysis_included").iloc[0]
-    lo_value = row_value(years, "lo", 0)
-    hi_value = row_value(years, "hi", 1)
-    if pd.isna(lo_value) or pd.isna(hi_value):
+    year_range = fiscal_year_range()
+    if year_range is None:
         st.error(
             "調達データを読み取れませんでした。SupabaseのRLSポリシーで "
             "`procurement_reader` にSELECT権限があるか確認してください。"
         )
         st.stop()
-    lo, hi = int(lo_value), int(hi_value)
-    c1, c2, c3 = st.columns(3)
-    fy = c1.slider("年度", lo, hi, (lo, hi))
-    keyword = c2.text_input("案件名キーワード")
-    consulting = c3.selectbox("コンサル認定", [CONSULTING_ALL, CONSULTING_BROAD, CONSULTING_STRICT])
-    with c3.expander("認定基準の注釈"):
-        st.markdown(
-            "- **広義**：コンサル会社・調査会社・シンクタンク等に加え、システム導入支援や調査分析など周辺領域を含めます。\n"
-            "- **狭義**：戦略・業務改革・政策調査など、コンサルティング中核に近い案件・受注者を優先して抽出します。\n"
-            "- いずれも機械的な暫定分類なので、共同研究の過程で見直す前提です。"
+    lo, hi = year_range
+    with st.form("procurement_search_form"):
+        c1, c2, c3 = st.columns(3)
+        fy = c1.slider("年度", lo, hi, (lo, hi))
+        keyword = c2.text_input("案件名キーワード")
+        consulting = c3.selectbox("コンサル認定", [CONSULTING_ALL, CONSULTING_BROAD, CONSULTING_STRICT])
+        with c3.expander("認定基準の注釈"):
+            st.markdown(
+                "- **広義**：コンサル会社・調査会社・シンクタンク等に加え、システム導入支援や調査分析など周辺領域を含めます。\n"
+                "- **狭義**：戦略・業務改革・政策調査など、コンサルティング中核に近い案件・受注者を優先して抽出します。\n"
+                "- いずれも機械的な暫定分類なので、共同研究の過程で見直す前提です。"
+            )
+        c4, c5, c6, c7 = st.columns(4)
+        vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
+        vendor_text = c5.text_input(
+            "受注者名（自由入力）",
+            value=vendor_query,
+            placeholder="候補にない場合だけ入力",
+            help="候補を選んだ場合は候補が優先されます。自由入力で探す場合は、受注者名（候補）を「指定なし」にしてください。",
+            key=f"vendor_text_{vendor_query}",
         )
-    c4, c5, c6, c7 = st.columns(4)
-    vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
-    vendor_text = c5.text_input(
-        "受注者名（自由入力）",
-        value=vendor_query,
-        placeholder="候補にない場合だけ入力",
-        help="候補を選んだ場合は候補が優先されます。自由入力で探す場合は、受注者名（候補）を「指定なし」にしてください。",
-        key=f"vendor_text_{vendor_query}",
-    )
-    body_pick = c6.selectbox("発注機関名", body_options)
-    min_amount = c7.number_input("最低落札額（万円）", min_value=0, value=0, step=100)
-    bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options)
+        body_pick = c6.selectbox("発注機関名", body_options)
+        min_amount = c7.number_input("最低落札額（万円）", min_value=0, value=0, step=100)
+        bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options)
+        submitted = st.form_submit_button("検索", type="primary")
+
+    search_requested = submitted or bool(vendor_query.strip())
     vendor_filter_label = ""
     if vendor_pick != NO_SELECTION:
         vendor_filter_label = vendor_pick
@@ -405,61 +420,64 @@ if page == "案件検索":
     elif vendor_text.strip():
         vendor_filter_label = vendor_text.strip()
 
-    where = ["analysis_included", "fiscal_year BETWEEN ? AND ?", "award_amount_yen >= ?"]
-    params: list = [fy[0], fy[1], int(min_amount * 10_000)]
-    if keyword.strip():
-        where.append("procurement_title ILIKE ?")
-        params.append(f"%{keyword.strip()}%")
-    if vendor_pick != NO_SELECTION:
-        where.append("vendor_name_canonical = ?")
-        params.append(vendor_pick)
-    elif vendor_text.strip():
-        where.append("vendor_name_canonical ILIKE ?")
-        params.append(f"%{vendor_text.strip()}%")
-    if body_pick != NO_SELECTION:
-        where.append("ordering_body_name = ?")
-        params.append(body_pick)
-    if bidding_method_pick != NO_SELECTION:
-        where.append("bidding_method_name = ?")
-        params.append(bidding_method_pick)
-    if consulting == CONSULTING_BROAD:
-        where.append("consulting_flag_broad")
-    elif consulting == CONSULTING_STRICT:
-        where.append("consulting_flag_strict")
-
-    predicate = " AND ".join(where)
-    total_df = query(f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}", params)
-    if total_df.empty:
-        total = pd.Series({"n": 0, "amount": 0})
+    if not search_requested:
+        st.info("検索条件を設定して「検索」を押してください。入力中はDB検索を実行しません。")
     else:
-        total = total_df.iloc[0]
-    total_n = int(row_value(total, "n", 0) or 0)
-    total_amount = float(row_value(total, "amount", 1) or 0)
-    m1, m2 = st.columns(2)
-    m1.metric("該当件数", f"{total_n:,}件")
-    m2.metric("落札額合計", f"{total_amount / 1e8:,.1f}億円")
+        where = ["analysis_included", "fiscal_year BETWEEN ? AND ?", "award_amount_yen >= ?"]
+        params: list = [fy[0], fy[1], int(min_amount * 10_000)]
+        if keyword.strip():
+            where.append("procurement_title ILIKE ?")
+            params.append(f"%{keyword.strip()}%")
+        if vendor_pick != NO_SELECTION:
+            where.append("vendor_name_canonical = ?")
+            params.append(vendor_pick)
+        elif vendor_text.strip():
+            where.append("vendor_name_canonical ILIKE ?")
+            params.append(f"%{vendor_text.strip()}%")
+        if body_pick != NO_SELECTION:
+            where.append("ordering_body_name = ?")
+            params.append(body_pick)
+        if bidding_method_pick != NO_SELECTION:
+            where.append("bidding_method_name = ?")
+            params.append(bidding_method_pick)
+        if consulting == CONSULTING_BROAD:
+            where.append("consulting_flag_broad")
+        elif consulting == CONSULTING_STRICT:
+            where.append("consulting_flag_strict")
 
-    columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
-    results = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
-    results = hide_internal_columns(add_portal_links(results))
-    st.dataframe(
-        results,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "外部": st.column_config.LinkColumn(
-                "外部",
-                display_text="開く",
-                help="調達ポータルの「調達情報の検索」を開きます。案件番号でヒットしない場合は、案件名・発注機関・年度で検索してください。",
-            )
-        },
-    )
-    if total_n > 1000:
-        st.caption("画面表示は最新1,000件まで。ダウンロードには全件を含めます。")
-    export = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
-    export = add_portal_links(export)
-    export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, min_amount)
-    st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
+        predicate = " AND ".join(where)
+        total_df = query(f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}", params)
+        if total_df.empty:
+            total = pd.Series({"n": 0, "amount": 0})
+        else:
+            total = total_df.iloc[0]
+        total_n = int(row_value(total, "n", 0) or 0)
+        total_amount = float(row_value(total, "amount", 1) or 0)
+        m1, m2 = st.columns(2)
+        m1.metric("該当件数", f"{total_n:,}件")
+        m2.metric("落札額合計", f"{total_amount / 1e8:,.1f}億円")
+
+        columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
+        results = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
+        results = hide_internal_columns(add_portal_links(results))
+        st.dataframe(
+            results,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "外部": st.column_config.LinkColumn(
+                    "外部",
+                    display_text="開く",
+                    help="調達ポータルの「調達情報の検索」を開きます。案件番号でヒットしない場合は、案件名・発注機関・年度で検索してください。",
+                )
+            },
+        )
+        if total_n > 1000:
+            st.caption("画面表示は最新1,000件まで。ダウンロードには全件を含めます。")
+        export = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
+        export = add_portal_links(export)
+        export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, min_amount)
+        st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
 
 elif page == "コンサル検索":
     name = st.text_input("コンサル名・受注者名を検索")
