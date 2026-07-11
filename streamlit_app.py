@@ -397,22 +397,35 @@ if page == "案件検索":
         )
     c4, c5, c6, c7 = st.columns(4)
     vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
-    vendor_text = c5.text_input("受注者名（自由入力）", value=vendor_query, placeholder="例：アクセンチュア", key=f"vendor_text_{vendor_query}")
+    vendor_text = c5.text_input(
+        "受注者名（自由入力）",
+        value=vendor_query,
+        placeholder="候補にない場合だけ入力",
+        help="候補を選んだ場合は候補が優先されます。自由入力で探す場合は、受注者名（候補）を「指定なし」にしてください。",
+        key=f"vendor_text_{vendor_query}",
+    )
     body_pick = c6.selectbox("発注機関名", body_options)
     min_amount = c7.number_input("最低落札額（万円）", min_value=0, value=0, step=100)
     bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options)
+    vendor_filter_label = ""
+    if vendor_pick != NO_SELECTION:
+        vendor_filter_label = vendor_pick
+        if vendor_text.strip():
+            st.caption("受注者名は候補選択を優先しています。自由入力で検索する場合は、受注者名（候補）を「指定なし」にしてください。")
+    elif vendor_text.strip():
+        vendor_filter_label = vendor_text.strip()
 
     where = ["analysis_included", "fiscal_year BETWEEN ? AND ?", "award_amount_yen >= ?"]
     params: list = [fy[0], fy[1], int(min_amount * 10_000)]
     if keyword.strip():
         where.append("procurement_title ILIKE ?")
         params.append(f"%{keyword.strip()}%")
-    if vendor_text.strip():
-        where.append("vendor_name_canonical ILIKE ?")
-        params.append(f"%{vendor_text.strip()}%")
-    elif vendor_pick != NO_SELECTION:
+    if vendor_pick != NO_SELECTION:
         where.append("vendor_name_canonical = ?")
         params.append(vendor_pick)
+    elif vendor_text.strip():
+        where.append("vendor_name_canonical ILIKE ?")
+        params.append(f"%{vendor_text.strip()}%")
     if body_pick != NO_SELECTION:
         where.append("ordering_body_name = ?")
         params.append(body_pick)
@@ -455,7 +468,7 @@ if page == "案件検索":
         st.caption("画面表示は最新1,000件まで。ダウンロードには全件を含めます。")
     export = query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
     export = add_portal_links(export)
-    export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_text, body_pick, bidding_method_pick, consulting, min_amount)
+    export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, min_amount)
     st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
 
 elif page == "コンサル検索":
