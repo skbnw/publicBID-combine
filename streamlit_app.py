@@ -141,10 +141,7 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
     postgres_sql = sql.replace("?", "%s")
     try:
         with connection.cursor() as cursor:
-            try:
-                cursor.execute(postgres_sql, params or [], prepare=False)
-            except TypeError:
-                cursor.execute(postgres_sql, params or [])
+            cursor.execute(postgres_sql, params or [])
             rows = cursor.fetchall()
             return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
     except Exception as exc:
@@ -152,10 +149,7 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
             db.clear()
             _, retry_connection = db()
             with retry_connection.cursor() as cursor:
-                try:
-                    cursor.execute(postgres_sql, params or [], prepare=False)
-                except TypeError:
-                    cursor.execute(postgres_sql, params or [])
+                cursor.execute(postgres_sql, params or [])
                 rows = cursor.fetchall()
                 return pd.DataFrame(rows, columns=[column.name for column in cursor.description])
         raise
