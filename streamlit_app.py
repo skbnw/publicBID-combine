@@ -127,12 +127,14 @@ def postgres_connection():
     url = database_url()
     if not url:
         raise RuntimeError("DATABASE_URL is not configured")
+    connect_kwargs = {"autocommit": True, "connect_timeout": 10}
     try:
-        connection = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+        connection = psycopg.connect(url, prepare_threshold=None, **connect_kwargs)
     except TypeError:
-        connection = psycopg.connect(url, autocommit=True)
+        connection = psycopg.connect(url, **connect_kwargs)
     with connection.cursor() as cursor:
         cursor.execute("SELECT set_config('search_path', %s, false)", (f"{database_schema()}, public",))
+        cursor.execute("SET statement_timeout TO '30s'")
     return connection
 
 
@@ -319,7 +321,7 @@ def require_database() -> None:
 
 @st.cache_data(show_spinner=False)
 def search_options() -> tuple[list[str], list[str], list[str]]:
-    consulting_vendors = first_column_values(query(
+    consulting_df, _ = safe_query(
         """
         SELECT vendor_name_canonical
         FROM procurements
@@ -330,8 +332,9 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
         LIMIT 300
         """
-    ))
-    top_vendors = first_column_values(query(
+    )
+    consulting_vendors = first_column_values(consulting_df)
+    top_df, _ = safe_query(
         """
         SELECT vendor_name_canonical
         FROM procurements
@@ -341,9 +344,10 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
         LIMIT 500
         """
-    ))
+    )
+    top_vendors = first_column_values(top_df)
     vendor_candidates = unique_preserve_order([*consulting_vendors, *top_vendors])
-    ordering_body_rows = query(
+    ordering_body_rows, _ = safe_query(
         """
         SELECT ordering_body_name, MIN(ministry_name) AS ministry_name
         FROM procurements
@@ -354,23 +358,22 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
         """
     )
     ordering_bodies = sort_ordering_bodies(ordering_body_rows)
-    bidding_methods = sort_bidding_methods(
-        query(
-            """
-            SELECT bidding_method_name
-            FROM procurements
-            WHERE analysis_included
-              AND COALESCE(bidding_method_name, '') <> ''
-            GROUP BY bidding_method_name
-            """
-        )["bidding_method_name"].dropna().tolist()
+    bidding_method_rows, _ = safe_query(
+        """
+        SELECT bidding_method_name
+        FROM procurements
+        WHERE analysis_included
+          AND COALESCE(bidding_method_name, '') <> ''
+        GROUP BY bidding_method_name
+        """
     )
+    bidding_methods = sort_bidding_methods(first_column_values(bidding_method_rows))
     return [NO_SELECTION, *vendor_candidates], [NO_SELECTION, *ordering_bodies], [NO_SELECTION, *bidding_methods]
 
 
 @st.cache_data(show_spinner=False)
 def fiscal_year_range() -> tuple[int, int] | None:
-    years = query("SELECT MIN(fiscal_year) AS lo, MAX(fiscal_year) AS hi FROM procurements WHERE analysis_included")
+    years, _ = safe_query("SELECT MIN(fiscal_year) AS lo, MAX(fiscal_year) AS hi FROM procurements WHERE analysis_included")
     if years.empty:
         return None
     row = years.iloc[0]
