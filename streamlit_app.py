@@ -477,25 +477,18 @@ if page == "案件検索":
             where.append("consulting_flag_strict")
 
         predicate = " AND ".join(where)
-        total_df, total_error = safe_query(f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}", params)
-        if total_error:
-            show_search_error(total_error)
-            st.stop()
-        if total_df.empty:
-            total = pd.Series({"n": 0, "amount": 0})
-        else:
-            total = total_df.iloc[0]
-        total_n = int(row_value(total, "n", 0) or 0)
-        total_amount = float(row_value(total, "amount", 1) or 0)
-        m1, m2 = st.columns(2)
-        m1.metric("該当件数", f"{total_n:,}件")
-        m2.metric("落札額合計", f"{total_amount / 1e8:,.1f}億円")
-
         columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
         results, results_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
         if results_error:
             show_search_error(results_error)
             st.stop()
+
+        display_count = len(results)
+        display_amount = float(results["award_amount_yen"].fillna(0).sum()) if "award_amount_yen" in results.columns else 0
+        m1, m2 = st.columns(2)
+        m1.metric("表示件数", f"{display_count:,}件")
+        m2.metric("落札額合計（表示分）", f"{display_amount / 1e8:,.1f}億円")
+
         results = hide_internal_columns(add_portal_links(results))
         st.dataframe(
             results,
@@ -509,8 +502,10 @@ if page == "案件検索":
                 )
             },
         )
-        if total_n > 1000:
-            st.caption("画面表示とCSVダウンロードは最新1,000件までです。安定運用のため、全件CSVは別途実装予定です。")
+        if display_count >= 1000:
+            st.caption("画面表示とCSVダウンロードは最新1,000件までです。条件を絞るとより安定します。")
+        else:
+            st.caption("表示件数は検索結果の全件です。")
         export = results.copy()
         export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, 0)
         st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
