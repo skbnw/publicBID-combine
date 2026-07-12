@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import re
+import time
 from urllib.parse import urlencode
 import duckdb
 import pandas as pd
@@ -154,10 +155,15 @@ def query(sql: str, params: list | None = None) -> pd.DataFrame:
 
 
 def safe_query(sql: str, params: list | None = None) -> tuple[pd.DataFrame, Exception | None]:
-    try:
-        return query(sql, params), None
-    except Exception as exc:
-        return pd.DataFrame(), exc
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return query(sql, params), None
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+    return pd.DataFrame(), last_error
 
 
 def show_search_error(exc: Exception) -> None:
@@ -166,6 +172,14 @@ def show_search_error(exc: Exception) -> None:
         "アプリは停止していません。条件を少し絞るか、時間をおいて再度検索してください。"
     )
     st.caption(f"エラー種別: {exc.__class__.__name__}")
+
+
+def query_or_empty(sql: str, params: list | None = None, label: str = "データ取得") -> pd.DataFrame:
+    df, error = safe_query(sql, params)
+    if error:
+        st.warning(f"{label}に失敗しました。時間をおいて再度お試しください。")
+        st.caption(f"エラー種別: {error.__class__.__name__}")
+    return df
 
 
 def query_param(name: str) -> str:
@@ -520,9 +534,9 @@ elif page == "コンサル検索":
           AND COALESCE(vendor_name_canonical, '') <> ''
     """
     if name.strip():
-        actors = query(actor_summary_sql + " AND vendor_name_canonical ILIKE ? GROUP BY vendor_name_canonical ORDER BY award_amount_yen DESC LIMIT 100", [f"%{name.strip()}%"])
+        actors = query_or_empty(actor_summary_sql + " AND vendor_name_canonical ILIKE ? GROUP BY vendor_name_canonical ORDER BY award_amount_yen DESC LIMIT 100", [f"%{name.strip()}%"], "コンサル検索")
     else:
-        actors = query(actor_summary_sql + " GROUP BY vendor_name_canonical ORDER BY award_amount_yen DESC LIMIT 100")
+        actors = query_or_empty(actor_summary_sql + " GROUP BY vendor_name_canonical ORDER BY award_amount_yen DESC LIMIT 100", label="コンサル検索")
     actors_display = add_vendor_search_links(actors, "canonical_name")
     st.dataframe(
         actors_display,
@@ -538,27 +552,33 @@ elif page == "コンサル検索":
     )
     selected = st.selectbox("詳細表示", actors.canonical_name.tolist() if not actors.empty else [])
     if selected:
-        summary = query("SELECT COUNT(*) n, SUM(award_amount_yen) amount, COUNT(DISTINCT ordering_body_name) bodies FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ?", [selected]).iloc[0]
+        summary_df = query_or_empty("SELECT COUNT(*) n, SUM(award_amount_yen) amount, COUNT(DISTINCT ordering_body_name) bodies FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ?", [selected], "コンサル詳細")
+        summary = summary_df.iloc[0] if not summary_df.empty else pd.Series({"n": 0, "amount": 0, "bodies": 0})
         a, b, c = st.columns(3)
         a.metric("落札件数", f"{int(summary['n']):,}件")
         b.metric("落札額", f"{float(summary['amount'] or 0)/1e8:,.1f}億円")
         c.metric("発注機関数", f"{int(summary['bodies']):,}")
-        yearly = query("SELECT fiscal_year AS 年度, COUNT(*) AS 件数, SUM(award_amount_yen)/1e8 AS 落札額_億円 FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ? GROUP BY fiscal_year ORDER BY fiscal_year", [selected])
+        yearly = query_or_empty("SELECT fiscal_year AS 年度, COUNT(*) AS 件数, SUM(award_amount_yen)/1e8 AS 落札額_億円 FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ? GROUP BY fiscal_year ORDER BY fiscal_year", [selected], "年度推移")
         st.line_chart(with_year_label_index(yearly))
         st.subheader("主要発注機関")
-        st.dataframe(query("SELECT ordering_body_name AS 発注機関, COUNT(*) AS 件数, SUM(award_amount_yen) AS 落札額_円 FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ? GROUP BY ordering_body_name ORDER BY 落札額_円 DESC LIMIT 30", [selected]), width="stretch", hide_index=True)
+        st.dataframe(query_or_empty("SELECT ordering_body_name AS 発注機関, COUNT(*) AS 件数, SUM(award_amount_yen) AS 落札額_円 FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ? GROUP BY ordering_body_name ORDER BY 落札額_円 DESC LIMIT 30", [selected], "主要発注機関"), width="stretch", hide_index=True)
 
 elif page == "省庁分析":
     st.subheader("省庁・発注機関別の傾向")
-    ministry_options = sort_ministries(query(
+    ministry_rows = query_or_empty(
         """
         SELECT ministry_name
         FROM procurements
         WHERE analysis_included AND COALESCE(ministry_name, '') <> ''
         GROUP BY ministry_name
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, ministry_name
-        """
-    )["ministry_name"].dropna().tolist())
+        """,
+        label="省庁一覧",
+    )
+    ministry_options = sort_ministries(first_column_values(ministry_rows))
+    if not ministry_options:
+        st.error("省庁一覧を取得できませんでした。時間をおいて再度お試しください。")
+        st.stop()
     ministry = st.selectbox("省庁", ministry_options)
     _, _, bidding_method_options = search_options()
     bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options, key="ministry_bidding_method")
@@ -575,7 +595,7 @@ elif page == "省庁分析":
         where.append("consulting_flag_strict")
     predicate = " AND ".join(where)
 
-    summary = query(
+    summary_df = query_or_empty(
         f"""
         SELECT COUNT(*) AS n,
                COUNT(DISTINCT vendor_name_canonical) AS vendors,
@@ -587,7 +607,9 @@ elif page == "省庁分析":
         WHERE {predicate}
         """,
         params,
-    ).iloc[0]
+        "省庁サマリー",
+    )
+    summary = summary_df.iloc[0] if not summary_df.empty else pd.Series({"n": 0, "vendors": 0, "bodies": 0, "amount": 0, "broad_n": 0, "strict_n": 0})
     m1, m2, m3, m4 = st.columns(4)
     total_n = int(summary["n"] or 0)
     m1.metric("件数", f"{total_n:,}件")
@@ -609,7 +631,7 @@ elif page == "省庁分析":
     elif scope == CONSULTING_STRICT:
         matrix_where.append("consulting_flag_strict")
     matrix_predicate = " AND ".join(matrix_where)
-    method_year = query(
+    method_year = query_or_empty(
         f"""
         SELECT COALESCE(bidding_method_name, '不明') AS 契約方式・落札方式,
                fiscal_year AS 年度,
@@ -621,6 +643,7 @@ elif page == "省庁分析":
         ORDER BY fiscal_year, bidding_method_name
         """,
         matrix_params,
+        "契約方式・落札方式別集計",
     )
     if method_year.empty:
         st.info("契約方式・落札方式別の集計対象データがありません。")
@@ -653,7 +676,7 @@ elif page == "省庁分析":
         st.bar_chart(chart_source)
 
     st.subheader("上位受注者")
-    top_vendors = query(
+    top_vendors = query_or_empty(
         f"""
         SELECT vendor_name_canonical AS 受注者,
                COUNT(*) AS 件数,
@@ -672,6 +695,7 @@ elif page == "省庁分析":
         LIMIT 50
         """,
         params,
+        "上位受注者",
     )
     if not top_vendors.empty:
         for column in ["落札総額_億円", "平均_億円", "最大_億円", "最小_億円"]:
@@ -691,7 +715,7 @@ elif page == "省庁分析":
     )
 
     st.subheader("年度推移")
-    yearly_ministry = query(
+    yearly_ministry = query_or_empty(
         f"""
         SELECT fiscal_year AS 年度,
                COUNT(*) AS 件数,
@@ -703,6 +727,7 @@ elif page == "省庁分析":
         ORDER BY fiscal_year
         """,
         params,
+        "年度推移",
     )
     if not yearly_ministry.empty:
         yearly_ministry["落札総額_億円"] = yearly_ministry["落札総額_億円"].round(1)
@@ -713,7 +738,7 @@ elif page == "省庁分析":
     st.dataframe(yearly_display, width="stretch", hide_index=True)
 
     st.subheader("発注機関別")
-    bodies = query(
+    bodies = query_or_empty(
         f"""
         SELECT ordering_body_name AS 発注機関,
                COUNT(*) AS 件数,
@@ -727,6 +752,7 @@ elif page == "省庁分析":
         LIMIT 50
         """,
         params,
+        "発注機関別集計",
     )
     if not bodies.empty:
         bodies["落札総額_億円"] = bodies["落札総額_億円"].round(1)
@@ -734,7 +760,7 @@ elif page == "省庁分析":
 
 elif page == "データ概要":
     st.subheader("区分別サマリー")
-    overview = query(
+    overview = query_or_empty(
         """
         SELECT '政府調達全体' AS 区分,
                COUNT(*) AS 件数,
@@ -762,13 +788,15 @@ elif page == "データ概要":
                MAX(fiscal_year) AS 終了年度
         FROM procurements
         WHERE analysis_included AND consulting_flag_strict
-        """
+        """,
+        label="区分別サマリー",
     )
-    overview["落札総額_億円"] = overview["落札総額_億円"].round(1)
+    if "落札総額_億円" in overview.columns:
+        overview["落札総額_億円"] = overview["落札総額_億円"].round(1)
     st.dataframe(overview, width="stretch", hide_index=True)
 
     st.subheader("年度別比較")
-    yearly = query(
+    yearly = query_or_empty(
         """
         SELECT fiscal_year AS 年度,
                '政府調達全体' AS 区分,
@@ -797,10 +825,13 @@ elif page == "データ概要":
         WHERE analysis_included AND consulting_flag_strict
         GROUP BY fiscal_year
         ORDER BY 年度 DESC, 区分
-        """
+        """,
+        label="年度別比較",
     )
-    yearly["落札総額_億円"] = yearly["落札総額_億円"].round(1)
-    yearly["年度"] = yearly["年度"].astype(str)
+    if "落札総額_億円" in yearly.columns:
+        yearly["落札総額_億円"] = yearly["落札総額_億円"].round(1)
+    if "年度" in yearly.columns:
+        yearly["年度"] = yearly["年度"].astype(str)
     st.dataframe(yearly, width="stretch", hide_index=True)
 
 else:
