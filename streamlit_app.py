@@ -429,7 +429,7 @@ if page == "案件検索":
                 "- **狭義**：戦略・業務改革・政策調査など、コンサルティング中核に近い案件・受注者を優先して抽出します。\n"
                 "- いずれも機械的な暫定分類なので、共同研究の過程で見直す前提です。"
             )
-        c4, c5, c6, c7 = st.columns(4)
+        c4, c5, c6 = st.columns(3)
         vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
         vendor_text = c5.text_input(
             "受注者名（自由入力）",
@@ -439,7 +439,6 @@ if page == "案件検索":
             key=f"vendor_text_{vendor_query}",
         )
         body_pick = c6.selectbox("発注機関名", body_options)
-        min_amount = c7.number_input("最低落札額（万円）", min_value=0, value=0, step=100)
         bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options)
         submitted = st.form_submit_button("検索", type="primary")
 
@@ -455,8 +454,8 @@ if page == "案件検索":
     if not search_requested:
         st.info("検索条件を設定して「検索」を押してください。入力中はDB検索を実行しません。")
     else:
-        where = ["analysis_included", "fiscal_year BETWEEN ? AND ?", "award_amount_yen >= ?"]
-        params: list = [fy[0], fy[1], int(min_amount * 10_000)]
+        where = ["analysis_included", "fiscal_year BETWEEN ? AND ?"]
+        params: list = [fy[0], fy[1]]
         if keyword.strip():
             where.append("procurement_title ILIKE ?")
             params.append(f"%{keyword.strip()}%")
@@ -519,7 +518,7 @@ if page == "案件検索":
             export = results.copy()
         else:
             export = add_portal_links(export)
-        export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, min_amount)
+        export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, 0)
         st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
 
 elif page == "コンサル検索":
