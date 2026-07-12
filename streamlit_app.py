@@ -14,7 +14,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "research.duckdb"
-APP_TITLE = "政府調達検索"
+APP_TITLE = "政府調達検索β"
 SEARCH_RESULT_LIMIT = 100
 NO_SELECTION = "指定なし"
 CONSULTING_ALL = "すべて"
@@ -478,6 +478,10 @@ if page == "案件検索":
             where.append("consulting_flag_strict")
 
         predicate = " AND ".join(where)
+        total_df, total_error = safe_query(
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(award_amount_yen), 0) AS amount FROM procurements WHERE {predicate}",
+            params,
+        )
         columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
         results, results_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT {SEARCH_RESULT_LIMIT}", params)
         if results_error:
@@ -485,10 +489,24 @@ if page == "案件検索":
             st.stop()
 
         display_count = len(results)
-        display_amount = float(results["award_amount_yen"].fillna(0).sum()) if "award_amount_yen" in results.columns else 0
-        m1, m2 = st.columns(2)
-        m1.metric("表示件数", f"{display_count:,}件")
-        m2.metric("落札額合計（表示分）", f"{display_amount / 1e8:,.1f}億円")
+        if total_error or total_df.empty:
+            total_count = None
+            total_amount = None
+        else:
+            total = total_df.iloc[0]
+            total_count = int(row_value(total, "n", 0) or 0)
+            total_amount = float(row_value(total, "amount", 1) or 0)
+
+        m1, m2, m3 = st.columns(3)
+        if total_count is None:
+            m1.metric("検索結果件数", "集計取得失敗")
+            m2.metric("落札額合計（検索結果全体）", "集計取得失敗")
+        else:
+            m1.metric("検索結果件数", f"{total_count:,}件")
+            m2.metric("落札額合計（検索結果全体）", f"{total_amount / 1e8:,.1f}億円")
+        m3.metric("画面表示", f"{display_count:,}件")
+        if total_error:
+            st.caption("検索結果全体の集計だけ取得できませんでした。一覧表示とCSVダウンロードは利用できます。")
 
         results = hide_internal_columns(add_portal_links(results))
         st.dataframe(
@@ -506,7 +524,7 @@ if page == "案件検索":
         if display_count >= SEARCH_RESULT_LIMIT:
             st.caption(f"画面表示とCSVダウンロードは最新{SEARCH_RESULT_LIMIT:,}件までです。条件を絞るとより安定します。")
         else:
-            st.caption("表示件数は検索結果の全件です。")
+            st.caption("画面表示とCSVダウンロードは検索結果の全件です。")
         export = results.copy()
         export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, 0)
         st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
@@ -828,7 +846,7 @@ else:
     st.subheader("About")
     st.markdown(
         """
-        **政府調達検索** は、調達ポータル由来の政府調達データを検索・分析するための研究用試作版です。
+        **政府調達検索β** は、調達ポータル由来の政府調達データを検索・分析するための研究用試作版です。
 
         ### データについて
 
@@ -861,7 +879,7 @@ else:
         ### ライセンス・クレジット
 
         - データ出典：調達ポータル
-        - アプリ：政府調達検索 project
+        - アプリ：政府調達検索β project
         - 本アプリで付与した分類・名寄せ・集計ロジックは研究用の暫定成果です。
         """
     )
