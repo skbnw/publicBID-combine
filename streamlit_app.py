@@ -510,14 +510,8 @@ if page == "案件検索":
             },
         )
         if total_n > 1000:
-            st.caption("画面表示は最新1,000件まで。ダウンロードには全件を含めます。")
-        export, export_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST", params)
-        if export_error:
-            st.warning("CSV用の全件データ取得に失敗しました。画面表示分のみCSVで出力できます。")
-            st.caption(f"エラー種別: {export_error.__class__.__name__}")
-            export = results.copy()
-        else:
-            export = add_portal_links(export)
+            st.caption("画面表示とCSVダウンロードは最新1,000件までです。安定運用のため、全件CSVは別途実装予定です。")
+        export = results.copy()
         export_filename = search_export_filename(fy, keyword, vendor_pick, vendor_filter_label, body_pick, bidding_method_pick, consulting, 0)
         st.download_button("検索結果をCSVでダウンロード", export.to_csv(index=False).encode("utf-8-sig"), export_filename, "text/csv")
 
@@ -549,8 +543,9 @@ elif page == "コンサル検索":
             )
         },
     )
-    selected = st.selectbox("詳細表示", actors.canonical_name.tolist() if not actors.empty else [])
-    if selected:
+    actor_names = first_column_values(actors[["canonical_name"]]) if "canonical_name" in actors.columns else []
+    selected = st.selectbox("詳細表示", [NO_SELECTION, *actor_names])
+    if selected != NO_SELECTION:
         summary_df = query_or_empty("SELECT COUNT(*) n, SUM(award_amount_yen) amount, COUNT(DISTINCT ordering_body_name) bodies FROM procurements WHERE analysis_included AND consulting_flag_broad AND vendor_name_canonical = ?", [selected], "コンサル詳細")
         summary = summary_df.iloc[0] if not summary_df.empty else pd.Series({"n": 0, "amount": 0, "bodies": 0})
         a, b, c = st.columns(3)
