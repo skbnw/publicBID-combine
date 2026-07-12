@@ -14,7 +14,8 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "research.duckdb"
-APP_TITLE = "政府調達サーチ β"
+APP_TITLE = "政府調達検索"
+SEARCH_RESULT_LIMIT = 300
 NO_SELECTION = "指定なし"
 CONSULTING_ALL = "すべて"
 CONSULTING_BROAD = "広義（周辺領域を含む）"
@@ -478,7 +479,7 @@ if page == "案件検索":
 
         predicate = " AND ".join(where)
         columns = "record_id, fiscal_year, contract_date, procurement_title, ordering_body_name, vendor_name_canonical, award_amount_yen, bidding_method_name, consulting_categories"
-        results, results_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT 1000", params)
+        results, results_error = safe_query(f"SELECT {columns} FROM procurements WHERE {predicate} ORDER BY contract_date DESC NULLS LAST LIMIT {SEARCH_RESULT_LIMIT}", params)
         if results_error:
             show_search_error(results_error)
             st.stop()
@@ -502,8 +503,8 @@ if page == "案件検索":
                 )
             },
         )
-        if display_count >= 1000:
-            st.caption("画面表示とCSVダウンロードは最新1,000件までです。条件を絞るとより安定します。")
+        if display_count >= SEARCH_RESULT_LIMIT:
+            st.caption(f"画面表示とCSVダウンロードは最新{SEARCH_RESULT_LIMIT:,}件までです。条件を絞るとより安定します。")
         else:
             st.caption("表示件数は検索結果の全件です。")
         export = results.copy()
@@ -827,7 +828,7 @@ else:
     st.subheader("About")
     st.markdown(
         """
-        **政府調達サーチ β** は、調達ポータル由来の政府調達データを検索・分析するための研究用試作版です。
+        **政府調達検索** は、調達ポータル由来の政府調達データを検索・分析するための研究用試作版です。
 
         ### データについて
 
@@ -860,7 +861,7 @@ else:
         ### ライセンス・クレジット
 
         - データ出典：調達ポータル
-        - アプリ：政府調達サーチ β project
+        - アプリ：政府調達検索 project
         - 本アプリで付与した分類・名寄せ・集計ロジックは研究用の暫定成果です。
         """
     )
