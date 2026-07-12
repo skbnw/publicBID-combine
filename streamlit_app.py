@@ -15,7 +15,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "research.duckdb"
 APP_TITLE = "政府調達検索"
-SEARCH_RESULT_LIMIT = 300
+SEARCH_RESULT_LIMIT = 100
 NO_SELECTION = "指定なし"
 CONSULTING_ALL = "すべて"
 CONSULTING_BROAD = "広義（周辺領域を含む）"
