@@ -93,18 +93,19 @@ st.set_page_config(page_title=APP_TITLE, page_icon="🏛️", layout="wide")
 
 def database_url() -> str | None:
     if value := os.getenv("DATABASE_URL"):
-        return value
+        return value.strip()
     try:
-        return st.secrets.get("DATABASE_URL")
+        value = st.secrets.get("DATABASE_URL")
+        return str(value).strip() if value else None
     except FileNotFoundError:
         return None
 
 
 def database_schema() -> str:
     if value := os.getenv("DB_SCHEMA"):
-        return value
+        return value.strip()
     try:
-        return st.secrets.get("DB_SCHEMA", "procurement")
+        return str(st.secrets.get("DB_SCHEMA", "procurement")).strip()
     except FileNotFoundError:
         return "procurement"
 
