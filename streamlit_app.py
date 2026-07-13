@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "research.duckdb"
 APP_TITLE = "政府調達検索β"
 SEARCH_RESULT_LIMIT = 100
+VENDOR_OPTION_LIMIT = 150
+ORDERING_BODY_OPTION_LIMIT = 120
 NO_SELECTION = "指定なし"
 CONSULTING_ALL = "すべて"
 CONSULTING_BROAD = "広義（周辺領域を含む）"
@@ -358,7 +360,7 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
           AND COALESCE(vendor_name_canonical, '') <> ''
         GROUP BY vendor_name_canonical
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
-        LIMIT 300
+        LIMIT 80
         """
     )
     consulting_vendors = first_column_values(consulting_df)
@@ -370,11 +372,11 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
           AND COALESCE(vendor_name_canonical, '') <> ''
         GROUP BY vendor_name_canonical
         ORDER BY SUM(award_amount_yen) DESC NULLS LAST, COUNT(*) DESC
-        LIMIT 500
+        LIMIT 120
         """
     )
     top_vendors = first_column_values(top_df)
-    vendor_candidates = unique_preserve_order([*consulting_vendors, *top_vendors])
+    vendor_candidates = unique_preserve_order([*consulting_vendors, *top_vendors])[:VENDOR_OPTION_LIMIT]
     ordering_body_rows, _ = safe_query(
         """
         SELECT ordering_body_name, MIN(ministry_name) AS ministry_name
@@ -382,10 +384,11 @@ def search_options() -> tuple[list[str], list[str], list[str]]:
         WHERE analysis_included
           AND COALESCE(ordering_body_name, '') <> ''
         GROUP BY ordering_body_name
-        ORDER BY ordering_body_name
+        ORDER BY COUNT(*) DESC, SUM(award_amount_yen) DESC NULLS LAST
+        LIMIT 200
         """
     )
-    ordering_bodies = sort_ordering_bodies(ordering_body_rows)
+    ordering_bodies = sort_ordering_bodies(ordering_body_rows)[:ORDERING_BODY_OPTION_LIMIT]
     bidding_method_rows, _ = safe_query(
         """
         SELECT bidding_method_name
@@ -427,36 +430,37 @@ if page == "案件検索":
     year_range = fiscal_year_range()
     if year_range is None:
         st.error(
-            "調達データを読み取れませんでした。SupabaseのRLSポリシーで "
-            "`procurement_reader` にSELECT権限があるか確認してください。"
+            "調達データを読み取れませんでした。データベース接続または初期データ取得でエラーが発生しています。"
         )
+        st.caption("Cloud Runのログに `DB_QUERY_ERROR` またはプロセスクラッシュの詳細が記録されます。")
         st.stop()
     lo, hi = year_range
     with st.form("procurement_search_form"):
         c1, c2, c3 = st.columns(3)
-        fy = c1.slider("年度", lo, hi, (lo, hi))
-        keyword = c2.text_input("案件名キーワード")
-        consulting = c3.selectbox("コンサル認定", [CONSULTING_ALL, CONSULTING_BROAD, CONSULTING_STRICT])
+        fy = c1.slider("年度", lo, hi, (lo, hi), key="fy_range_v2")
+        keyword = c2.text_input("案件名キーワード", key="keyword_v2")
+        consulting = c3.selectbox("コンサル認定", [CONSULTING_ALL, CONSULTING_BROAD, CONSULTING_STRICT], index=0, key="consulting_v2")
         with c3.expander("認定基準の注釈"):
             st.markdown(
                 "- **広義**：コンサル会社・調査会社・シンクタンク等に加え、システム導入支援や調査分析など周辺領域を含めます。\n"
                 "- **狭義**：戦略・業務改革・政策調査など、コンサルティング中核に近い案件・受注者を優先して抽出します。\n"
                 "- いずれも機械的な暫定分類なので、共同研究の過程で見直す前提です。"
             )
+        submitted_top = st.form_submit_button("この条件で検索", type="primary")
         c4, c5, c6 = st.columns(3)
-        vendor_pick = c4.selectbox("受注者名（候補）", vendor_options)
+        vendor_pick = c4.selectbox("受注者名（候補）", vendor_options, index=0, key="vendor_pick_v3")
         vendor_text = c5.text_input(
             "受注者名（自由入力）",
             value=vendor_query,
             placeholder="候補にない場合だけ入力",
             help="候補を選んだ場合は候補が優先されます。自由入力で探す場合は、受注者名（候補）を「指定なし」にしてください。",
-            key=f"vendor_text_{vendor_query}",
+            key=f"vendor_text_v3_{vendor_query}",
         )
-        body_pick = c6.selectbox("発注機関名", body_options)
-        bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options)
-        submitted = st.form_submit_button("検索", type="primary")
+        body_pick = c6.selectbox("発注機関名", body_options, index=0, key="body_pick_v3")
+        bidding_method_pick = st.selectbox("契約方式・落札方式", bidding_method_options, index=0, key="bidding_method_v2")
+        submitted_bottom = st.form_submit_button("この条件で検索（再実行）", type="primary")
 
-    search_requested = submitted or bool(vendor_query.strip())
+    search_requested = submitted_top or submitted_bottom or bool(vendor_query.strip())
     vendor_filter_label = ""
     if vendor_pick != NO_SELECTION:
         vendor_filter_label = vendor_pick
@@ -468,6 +472,7 @@ if page == "案件検索":
     if not search_requested:
         st.info("検索条件を設定して「検索」を押してください。入力中はDB検索を実行しません。")
     else:
+        st.success("検索を実行しました。")
         where = ["analysis_included", "fiscal_year BETWEEN ? AND ?"]
         params: list = [fy[0], fy[1]]
         if keyword.strip():
@@ -520,6 +525,8 @@ if page == "案件検索":
         m3.metric("画面表示", f"{display_count:,}件")
         if total_error:
             st.caption("検索結果全体の集計だけ取得できませんでした。一覧表示とCSVダウンロードは利用できます。")
+        if display_count == 0:
+            st.warning("この条件に一致する表示対象データはありませんでした。受注者名・発注機関名・年度などの条件を少し広げてください。")
 
         results = hide_internal_columns(add_portal_links(results))
         st.dataframe(

@@ -1,4 +1,4 @@
-pandas>=2.0
-duckdb>=1.1
-streamlit>=1.42
-psycopg[binary]>=3.2
+pandas>=2.2,<2.3
+duckdb>=1.1,<1.2
+streamlit>=1.42,<1.43
+psycopg[binary]>=3.2,<3.3
