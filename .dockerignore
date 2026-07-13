@@ -1,0 +1,13 @@
+.git
+.streamlit
+__pycache__
+*.pyc
+.venv
+venv
+env
+data
+output
+*.duckdb
+*.duckdb.wal
+memo.txt
+*.log
