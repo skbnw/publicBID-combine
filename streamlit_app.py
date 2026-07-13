@@ -162,6 +162,10 @@ def safe_query(sql: str, params: list | None = None) -> tuple[pd.DataFrame, Exce
             return query(sql, params), None
         except Exception as exc:
             last_error = exc
+            print(
+                f"DB_QUERY_ERROR {exc.__class__.__name__}: {exc}",
+                flush=True,
+            )
             if attempt < 2:
                 time.sleep(0.25 * (attempt + 1))
     return pd.DataFrame(), last_error
