@@ -163,8 +163,16 @@ def safe_query(sql: str, params: list | None = None) -> tuple[pd.DataFrame, Exce
             return query(sql, params), None
         except Exception as exc:
             last_error = exc
+            message = re.sub(
+                r"postgresql://([^:/@\s]+):([^@\s]+)@",
+                r"postgresql://\1:***@",
+                str(exc),
+            )
+            url = database_url()
+            if url:
+                message = message.replace(url, "[DATABASE_URL]")
             print(
-                f"DB_QUERY_ERROR {exc.__class__.__name__}: {exc}",
+                f"DB_QUERY_ERROR {exc.__class__.__name__}: {message[:800]}",
                 flush=True,
             )
             if attempt < 2:
